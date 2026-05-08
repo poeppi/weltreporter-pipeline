@@ -1,59 +1,172 @@
 # weltreporter-pipeline
-Multi-channel distribution pipeline for Weltreporter newsletter (MOOC final project)
 
-## Weltreporter newsletter → multi-channel distribution pipeline
+Multi-channel distribution pipeline for the Weltreporter newsletter.
 
-### The problem
+## The problem
 
-Weltreporter e.V. is a network of German-speaking foreign correspondents, publishing a newsletter with 10+ articles every month — each from a different region of the world.
+Weltreporter e.V. is a network of German-speaking foreign correspondents, publishing a newsletter with 10+ articles every month — each from a different region of the world. Distributing newsletter content manually — copy, format, route to the right regional channel, adapt for LinkedIn, repeat for every article — takes roughly two hours a month and happens inconsistently. This pipeline replaces that with three commands and a daily cron job.
 
-We're building a Circle community for our members and designing the content workflows from scratch. Distributing newsletter content manually — copy, format, route to the right regional channel, adapt for LinkedIn, repeat for every article — takes roughly two hours a month and happens inconsistently. This pipeline solves that before it becomes a habit.
+## What's built
 
-### The solution
+### Stage 0 — Fetch (`fetch_newsletter.py`)
 
-A multi-stage CLI pipeline built with Claude Code:
+Fetches the monthly newsletter from Brevo via API, converts HTML to plain text, extracts all articles using Claude Haiku, and writes structured output to `newsletter-content.json`.
 
-**Stage 1 — Extract & route** *(already built in Module 2)*
-Takes a newsletter URL, extracts each article, formats it as a Circle post, and routes it to the correct regional channel. Generates a posting schedule: one article per day.
+```bash
+venv/bin/python3 fetch_newsletter.py            # fetch latest campaign
+venv/bin/python3 fetch_newsletter.py --id 64    # fetch specific campaign
+venv/bin/python3 fetch_newsletter.py --list     # list last 20 campaigns
+```
 
-**Stage 2 — LinkedIn adaptation** *(Module 2/3)*
-Generates a LinkedIn version of each post: shorter, public-facing, with hashtags and a link back to the newsletter.
+Idempotent: skips re-fetching if the same campaign is already cached. Use `--force` to override.
 
-**Stage 3 — Automated scheduling** *(Module 3)*
-Stage 1/2 writes a `schedule.json` file: one entry per article, each with the Circle post, the LinkedIn version, the target channel, and the posting date.
+### Stage 1 — Circle posts (`generate_circle_posts.py`)
 
-A GitHub Actions workflow runs daily at 8:00 UTC. It reads `schedule.json`, finds today's entry, and executes two steps:
+Reads `newsletter-content.json`, formats each article as a Circle community post (exact text, author credit, clickable link), routes it to the correct regional channel, and writes the result into `schedule.json`.
 
-1. **Circle:** POST request to the Circle API with the formatted post and channel ID. Auth via `CIRCLE_API_TOKEN` stored as a GitHub Secret.
-2. **LinkedIn:** POST request to the LinkedIn Posts API. Auth via OAuth 2.0 access token, stored as `LINKEDIN_ACCESS_TOKEN`. *(OAuth setup pending — one-time flow required.)*
+```bash
+venv/bin/python3 generate_circle_posts.py
+venv/bin/python3 generate_circle_posts.py --force   # regenerate all
+```
 
-After posting, the workflow marks the entry as `posted: true` in `schedule.json` and commits the update back to the repo. That gives a built-in posting log without a separate database.
+No AI call needed: formatting is deterministic. Channel routing is defined in `channel-map.json`.
 
-If a post fails (API error, rate limit), the workflow retries once and logs the error to a `errors.log` file in the repo.
+### Stage 2 — LinkedIn posts (`generate_linkedin_posts.py`)
 
-**Stage 4 — Archive access** *(Module 4, stretch goal)*
-Weltreporter's newsletter archive sits in Mailchimp or Brevo. Both services offer a REST API that lists past campaigns and returns the full HTML content of each issue.
+Reads `newsletter-content.json`, generates a public-facing LinkedIn version of each article using Claude Haiku — hook, condensed body, author credit, hashtags — and writes the result into `schedule.json`.
 
-Stage 4 builds a lightweight MCP server that wraps this API and exposes two tools to Claude Code:
+```bash
+venv/bin/python3 generate_linkedin_posts.py
+venv/bin/python3 generate_linkedin_posts.py --force  # regenerate all
+```
 
-- `list_issues(limit)` — returns a list of past newsletter issues with title, date, and campaign ID
-- `fetch_issue(campaign_id)` — returns the full HTML of a specific issue, ready for Stage 1 to parse
+Character limit: 1,300 characters per post. The script warns if a post exceeds this.
 
-With these tools in place, Claude Code can process the entire back catalogue: fetch an issue, run it through Stage 1 (extract & route) and Stage 2 (LinkedIn), write the results into `schedule.json`, and hand off to Stage 3 for drip-posting — one article per day, spreading historical content across weeks.
+### Stage 3 — Automated posting (`post_today.py` + `.github/workflows/post-today.yml`)
 
-Practical use case: when the Circle community launches, Stage 4 pre-populates channels with the best articles from the past 12 months, scheduled to post daily so the community feels active from day one.
+A GitHub Actions workflow runs daily at 08:00 UTC. It reads `schedule.json`, finds today's entry, and posts to Circle and LinkedIn. After each successful post it marks the entry as `posted_circle: true` / `posted_linkedin: true` and commits the updated `schedule.json` back to the repo.
 
-*[OPEN: confirm whether the archive runs on Mailchimp or Brevo — API auth setup differs.]*
+```bash
+venv/bin/python3 post_today.py --dry-run --date 2026-04-18   # preview
+venv/bin/python3 post_today.py --circle-only --date 2026-04-18
+venv/bin/python3 post_today.py --linkedin-only --date 2026-04-18
+```
 
-### Why it matters
+### Stage 4 — Archive access (stretch goal, not yet built)
 
-Two hours of monthly copy-paste becomes one command. Weltreporter content lands in the right channels, every day, on schedule — without anyone having to remember.
+A lightweight MCP server wrapping the Brevo API to expose `list_issues()` and `fetch_issue()` as tools for Claude Code — enabling back-catalogue processing.
 
-### What I'll submit
+## Monthly workflow
 
-- Claude Code skill file (`/weltreporter-circle`) with channel routing logic
-- GitHub Actions workflow (`.github/workflows/post-today.yml`) for scheduled posting
-- MCP server for Mailchimp/Brevo archive access *(Stage 4)*
-- README: setup, usage, expected output, limitations
-- Sample input (newsletter URL) + sample output (formatted posts)
-- GitHub: https://github.com/poeppi/weltreporter-pipeline
+```bash
+# 1. Fetch newsletter (once the new issue is sent)
+venv/bin/python3 fetch_newsletter.py
+
+# 2. Generate Circle posts
+venv/bin/python3 generate_circle_posts.py
+
+# 3. Generate LinkedIn posts
+venv/bin/python3 generate_linkedin_posts.py
+
+# GitHub Actions handles the rest: one post per day at 08:00 UTC
+```
+
+## Setup
+
+### Requirements
+
+```bash
+python3 -m venv venv
+venv/bin/pip install -r requirements.txt
+```
+
+### Environment variables
+
+Copy `.env.example` to `.env` and fill in all values:
+
+```
+BREVO_API_KEY               Brevo API key (newsletter source)
+ANTHROPIC_API_KEY           Anthropic API key (Claude Haiku)
+CIRCLE_API_TOKEN            Circle community API token
+CIRCLE_COMMUNITY_ID         Circle community ID (integer)
+LINKEDIN_CLIENT_ID          LinkedIn Developer App client ID
+LINKEDIN_CLIENT_SECRET      LinkedIn Developer App client secret
+LINKEDIN_ACCESS_TOKEN       LinkedIn OAuth access token (valid ~60 days)
+LINKEDIN_ORG_ID             LinkedIn organization numeric ID
+```
+
+### LinkedIn token setup (one-time)
+
+1. Create a LinkedIn Developer App at https://developer.linkedin.com/
+2. Add product: **Share on LinkedIn**
+3. Add redirect URI: `http://localhost:8080/callback`
+4. Enter `LINKEDIN_CLIENT_ID` and `LINKEDIN_CLIENT_SECRET` in `.env`
+5. Run the OAuth helper:
+   ```bash
+   venv/bin/python3 get_linkedin_token.py
+   ```
+   The script opens a browser, handles the redirect, and prints `LINKEDIN_ACCESS_TOKEN` and `LINKEDIN_ORG_ID`.
+
+Token expires after ~60 days. Re-run `get_linkedin_token.py` to renew.
+
+### GitHub Secrets
+
+For the GitHub Actions workflow, set these repository secrets:
+
+| Secret | Value |
+|---|---|
+| `CIRCLE_API_TOKEN` | from `.env` |
+| `CIRCLE_COMMUNITY_ID` | from `.env` |
+| `LINKEDIN_ACCESS_TOKEN` | from LinkedIn OAuth flow |
+| `LINKEDIN_ORG_ID` | from LinkedIn OAuth flow |
+
+### Channel map
+
+`channel-map.json` maps Weltreporter regional channel names to Circle space IDs. Update if channels change:
+
+```json
+{
+  "Neues in der Welt": 2514327,
+  "Europa": 2514237,
+  ...
+}
+```
+
+## Repository structure
+
+```
+fetch_newsletter.py         Stage 0: fetch + extract newsletter
+generate_circle_posts.py    Stage 1: format Circle posts
+generate_linkedin_posts.py  Stage 2: generate LinkedIn posts
+post_today.py               Stage 3: post today's entry
+get_linkedin_token.py       LinkedIn OAuth helper (one-time setup)
+channel-map.json            Circle channel → space ID mapping
+schedule.json               Posting schedule with content + status flags
+newsletter-content.json     Extracted newsletter (gitignored, rebuilt each month)
+.github/workflows/
+  post-today.yml            Daily GitHub Actions workflow
+```
+
+## Sample output
+
+`schedule.json` after a full run:
+
+```json
+[
+  {
+    "tag": 1,
+    "datum": "2026-04-17",
+    "kanal": "Neues in der Welt",
+    "titel": "Gott, Götter und das Weltgeschehen",
+    "circle_post": "...",
+    "linkedin_post": "...",
+    "hashtags": ["#Weltreporter", "#Religion", "#Glaube"],
+    "posted_circle": true,
+    "posted_linkedin": false
+  }
+]
+```
+
+## Why it matters
+
+Two hours of monthly copy-paste become three commands. Weltreporter content lands in the right channels, every day, on schedule.
