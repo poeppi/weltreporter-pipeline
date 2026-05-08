@@ -1,6 +1,5 @@
 .env
 newsletter-content.json
-errors.log
 __pycache__/
 *.pyc
 venv/
