@@ -1,4 +1,5 @@
-# Final project proposal – week 2
+# weltreporter-pipeline
+Multi-channel distribution pipeline for Weltreporter newsletter (MOOC final project)
 
 ## Weltreporter newsletter → multi-channel distribution pipeline
 
