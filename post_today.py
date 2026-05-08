@@ -127,7 +127,7 @@ def post_to_circle(entry, channel_map, community_id, api_token, dry_run=False):
     if resp.status_code in (200, 201):
         return True
 
-    log_error(f"Circle API {resp.status_code}: {resp.text[:300]}")
+    log_error(f"Circle API {resp.status_code}")
     return False
 
 
@@ -165,7 +165,7 @@ def post_to_linkedin(entry, org_id, access_token, dry_run=False):
     if resp.status_code in (200, 201):
         return True
 
-    log_error(f"LinkedIn API {resp.status_code}: {resp.text[:300]}")
+    log_error(f"LinkedIn API {resp.status_code}")
     return False
 
 
